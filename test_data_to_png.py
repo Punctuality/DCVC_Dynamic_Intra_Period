@@ -4,16 +4,20 @@
 from src.utils.video_reader import YUVReader
 from src.utils.video_writer import PNGWriter
 
+from tqdm.auto import tqdm
+
 
 def convert_one_seq_to_png(src_path, width, height, dst_path):
     src_reader = YUVReader(src_path, width, height, src_format='420')
     png_writer = PNGWriter(dst_path, width, height)
     rgb = src_reader.read_one_frame(dst_format='rgb')
     processed_frame = 0
-    while not src_reader.eof:
-        png_writer.write_one_frame(rgb=rgb, src_format='rgb')
-        processed_frame += 1
-        rgb = src_reader.read_one_frame(dst_format='rgb')
+    with tqdm() as progress_bar:
+        while not src_reader.eof:
+            png_writer.write_one_frame(rgb=rgb, src_format='rgb')
+            processed_frame += 1
+            progress_bar.update(1)
+            rgb = src_reader.read_one_frame(dst_format='rgb')
     print(src_path, processed_frame)
 
 
