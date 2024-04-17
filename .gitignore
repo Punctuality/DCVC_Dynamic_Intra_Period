@@ -2,3 +2,6 @@ media/
 results/
 src/build/
 input/*.yuv
+
+checkpoints/*.tar
+checkpoints/*.pth
