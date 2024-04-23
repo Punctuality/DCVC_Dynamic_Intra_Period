@@ -1,0 +1,19 @@
+{
+    "root_path": "/workspace/DCVC_Dynamic_Intra_Period/media/syntetic/",
+    "test_classes": {
+        "straight": {
+            "test": 1,
+            "base_path": "",
+            "src_type": "png",
+            "sequences": {
+                "predictor_dataset_0": {
+                    "width": 1920,
+                    "height": 1080,
+                    "frames": 3000,
+                    "intra_period": 3100,
+                    "ref_points_path": "/workspace/DCVC_Dynamic_Intra_Period/media/syntetic/predictor_dataset_0/frames.json"
+                }
+            }
+        }
+    }
+}

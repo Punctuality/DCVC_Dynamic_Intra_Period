@@ -24,6 +24,7 @@ from src.utils.metrics import calc_psnr, calc_msssim, calc_msssim_rgb
 from src.transforms.functional import ycbcr444_to_420, ycbcr420_to_444, \
     rgb_to_ycbcr444, ycbcr444_to_rgb
 
+from tqdm.auto import trange
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Example testing script")
@@ -48,6 +49,8 @@ def parse_args():
     parser.add_argument("--cuda", type=str2bool, default=False)
     parser.add_argument('--cuda_idx', type=int, nargs="+", help='GPU indexes to use')
     parser.add_argument('--calc_ssim', type=str2bool, default=False, required=False)
+    parser.add_argument('--context_fetching', type=str2bool, default=False)
+    parser.add_argument('--context_dataset_path', type=str, required=False)
     parser.add_argument('--write_stream', type=str2bool, default=False)
     parser.add_argument('--stream_path', type=str, default="out_bin")
     parser.add_argument('--save_decoded_frame', type=str2bool, default=False)
@@ -159,7 +162,7 @@ def run_one_point_fast(p_frame_net, i_frame_net, args):
             # pad if necessary
             x_padded = F.pad(x, (padding_l, padding_r, padding_t, padding_b), mode="replicate")
 
-            if frame_idx % args['intra_period'] == 0: # That's where custom evaluation should be provided
+            if frame_idx % args['intra_period'] == 0:
                 result = i_frame_net.encode(x_padded, args['q_index_i'])
                 dpb = {
                     "ref_frame": result["x_hat"],
@@ -173,7 +176,6 @@ def run_one_point_fast(p_frame_net, i_frame_net, args):
                 bits.append(result["bit"])
             else:
                 if reset_interval > 0 and frame_idx % reset_interval == 1:
-                    # TODO Resetting is good... but may intervene with updating the I_frames
                     dpb["ref_feature"] = None
                 fa_idx = index_map[frame_idx % rate_gop_size]
                 result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx)
@@ -202,6 +204,87 @@ def run_one_point_fast(p_frame_net, i_frame_net, args):
                                    frame_types, bits, psnrs, msssims, verbose=verbose_json)
     return log_result
 
+def generate_context_dataset(p_frame_net, i_frame_net, args):
+    with open(args['ref_points_path'], 'r') as f:
+        ref_points = json.load(f)
+    ref_points = ref_points['refresh_frames']
+
+    frame_num = args['frame_num']
+    rate_gop_size = args['rate_gop_size']
+    verbose = args['verbose']
+    reset_interval = args['reset_interval']
+    verbose_json = args['verbose_json']
+    device = next(i_frame_net.parameters()).device
+
+    frame_types = []
+    psnrs = []
+    msssims = []
+    bits = []
+    index_map = [0, 1, 0, 2, 0, 2, 0, 2]
+
+    start_time = time.time()
+    src_reader = get_src_reader(args)
+    pic_height = args['src_height']
+    pic_width = args['src_width']
+    padding_l, padding_r, padding_t, padding_b = get_padding_size(pic_height, pic_width, 16)
+
+    encoded_context_dataset = []
+
+    with torch.no_grad():
+        for frame_idx in trange(frame_num, desc=f'Encoding frames'):
+            frame_start_time = time.time()
+            x, y, u, v, rgb = get_src_frame(args, src_reader, device)
+
+            # pad if necessary
+            x_padded = F.pad(x, (padding_l, padding_r, padding_t, padding_b), mode="replicate")
+
+            if frame_idx % args['intra_period'] == 0:
+                result = i_frame_net.encode(x_padded, args['q_index_i'])
+                dpb = {
+                    "ref_frame": result["x_hat"],
+                    "ref_feature": None,
+                    "ref_mv_feature": None,
+                    "ref_y": None,
+                    "ref_mv_y": None,
+                }
+                recon_frame = result["x_hat"]
+                frame_types.append(0)
+                bits.append(result["bit"])
+            else:
+                if (frame_idx + 1) in ref_points:
+                    dpb["ref_feature"] = None
+                fa_idx = index_map[frame_idx % rate_gop_size]
+                result = p_frame_net.fetch_context(x_padded, dpb, args['q_index_p'], fa_idx)
+
+                encoded_context_dataset.append(result['context'])
+
+                dpb = result["dpb"]
+                recon_frame = dpb["ref_frame"]
+                frame_types.append(1)
+                bits.append(result['bit'])
+
+            recon_frame = recon_frame.clamp_(0, 1)
+            x_hat = F.pad(recon_frame, (-padding_l, -padding_r, -padding_t, -padding_b))
+            frame_end_time = time.time()
+            curr_psnr, curr_ssim = get_distortion(args, x_hat, y, u, v, rgb)
+            psnrs.append(curr_psnr)
+            msssims.append(curr_ssim)
+
+            if verbose >= 2:
+                print(f"frame {frame_idx}, {frame_end_time - frame_start_time:.3f} seconds, "
+                      f"bits: {bits[-1]:.3f}, PSNR: {psnrs[-1][0]:.4f}, "
+                      f"MS-SSIM: {msssims[-1][0]:.4f} ")
+
+    src_reader.close()
+    test_time = time.time() - start_time
+
+    concat_context = torch.cat(encoded_context_dataset, dim=0).to(torch.float16)
+    print("Writing fetched context to [{}]: {}".format(concat_context.size(), args['context_dataset_path']))
+    torch.save(concat_context, args['context_dataset_path'])
+
+    log_result = generate_log_json(frame_num, pic_height * pic_width, test_time,
+                                   frame_types, bits, psnrs, msssims, verbose=verbose_json)
+    return log_result
 
 def run_one_point_with_stream(p_frame_net, i_frame_net, args):
     frame_num = args['frame_num']
@@ -242,7 +325,7 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
             # pad if necessary
             x_padded = F.pad(x, (padding_l, padding_r, padding_t, padding_b), mode="replicate")
 
-            if frame_idx % args['intra_period'] == 0:
+            if frame_idx % args['intra_period'] == 0: # TODO add check for referenced points
                 sps = {
                     'sps_id': -1,
                     'height': pic_height,
@@ -429,7 +512,9 @@ def worker(args):
     args['curr_rec_path'] = args['curr_bin_path'].replace('.bin', '.yuv')
     args['curr_json_path'] = args['curr_bin_path'].replace('.bin', '.json')
 
-    if args['write_stream']:
+    if args['context_fetching']:
+        result = generate_context_dataset(p_frame_net, i_frame_net, args)
+    elif args['write_stream']:
         result = run_one_point_with_stream(p_frame_net, i_frame_net, args)
     else:
         result = run_one_point_fast(p_frame_net, i_frame_net, args)

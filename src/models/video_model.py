@@ -497,6 +497,15 @@ class DMC(CompressionModel):
             "decoding_time": t1 - t0,
         }
 
+    def fetch_context(self, x, dpb, q_index, fa_idx):
+        encoded = self.forward_one_frame(x, dpb, q_index=q_index, fa_idx=fa_idx)
+        result = {
+            "dpb": encoded['dpb'],
+            "bit": encoded['bit'].item(),
+            "context": encoded['meta']['context']
+        }
+        return result
+
     def encode(self, x, dpb, q_index, fa_idx, sps_id=0, output_file=None):
         # pic_width and pic_height may be different from x's size. x here is after padding
         # x_hat has the same size with x
@@ -538,10 +547,11 @@ class DMC(CompressionModel):
             self.mv_y_spatial_prior_adaptor_3, self.mv_y_spatial_prior)
 
         mv_hat, mv_feature = self.mv_decoder(mv_y_hat, mv_y_q_dec)
-
+        
         context1, context2, context3, _ = self.motion_compensation(dpb, mv_hat, fa_idx)
 
         y = self.contextual_encoder(x, context1, context2, context3, y_q_enc)
+
         y_pad, slice_shape = self.pad_for_y(y)
         z = self.contextual_hyper_prior_encoder(y_pad)
         z_hat = self.quant(z)
@@ -579,4 +589,7 @@ class DMC(CompressionModel):
                     "ref_mv_y": mv_y_hat,
                 },
                 "bit": bit,
+                "meta": {
+                    "context": y.detach().cpu(),
+                }
                 }

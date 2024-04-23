@@ -2,7 +2,12 @@ numpy>=1.20.0
 scipy
 matplotlib
 torch>=2.0.0
+torchvision
+torchsummary
 tensorboard
 tqdm
 bd-metric
 ptflops
+jupyter
+matplotlib
+gzip

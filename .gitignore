@@ -5,3 +5,5 @@ input/*.yuv
 
 checkpoints/*.tar
 checkpoints/*.pth
+
+__pycache__

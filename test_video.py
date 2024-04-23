@@ -88,6 +88,7 @@ def main():
                 cur_args['src_height'] = config[ds_name]['sequences'][seq]['height']
                 cur_args['src_width'] = config[ds_name]['sequences'][seq]['width']
                 cur_args['intra_period'] = config[ds_name]['sequences'][seq]['intra_period']
+                cur_args['ref_points_path'] = config[ds_name]['sequences'][seq]['ref_points_path']
                 if args.force_intra:
                     cur_args['intra_period'] = 1
                 if args.force_intra_period > 0:
@@ -98,6 +99,8 @@ def main():
                 cur_args['rate_gop_size'] = args.rate_gop_size
                 cur_args['calc_ssim'] = args.calc_ssim
                 cur_args['dataset_path'] = os.path.join(root_path, config[ds_name]['base_path'])
+                cur_args['context_fetching'] = args.context_fetching
+                cur_args['context_dataset_path'] = args.context_dataset_path
                 cur_args['write_stream'] = args.write_stream
                 cur_args['stream_path'] = args.stream_path
                 cur_args['save_decoded_frame'] = args.save_decoded_frame
