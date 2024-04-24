@@ -10,4 +10,4 @@ bd-metric
 ptflops
 jupyter
 matplotlib
-gzip
+scikit_learn
