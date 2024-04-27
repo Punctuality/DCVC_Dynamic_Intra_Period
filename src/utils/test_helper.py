@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from src.models.intra_predictor import IntraPredictorModel
 from src.models.video_model import DMC
 from src.models.image_model import DMCI
 
@@ -24,7 +25,7 @@ from src.utils.metrics import calc_psnr, calc_msssim, calc_msssim_rgb
 from src.transforms.functional import ycbcr444_to_420, ycbcr420_to_444, \
     rgb_to_ycbcr444, ycbcr444_to_rgb
 
-from tqdm.auto import trange
+from tqdm.auto import trange, tqdm
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Example testing script")
@@ -57,6 +58,8 @@ def parse_args():
     parser.add_argument('--output_path', type=str, required=True)
     parser.add_argument('--verbose_json', type=str2bool, default=False)
     parser.add_argument('--verbose', type=int, default=0)
+    parser.add_argument('--use_intra_predictor', type=str2bool, default=False)
+    parser.add_argument('--intra_predictor_path', type=str, required=False)
 
     args = parser.parse_args()
     return args
@@ -155,7 +158,7 @@ def run_one_point_fast(p_frame_net, i_frame_net, args):
     padding_l, padding_r, padding_t, padding_b = get_padding_size(pic_height, pic_width, 16)
 
     with torch.no_grad():
-        for frame_idx in range(frame_num):
+        for frame_idx in trange(frame_num, desc='Encoding frames'):
             frame_start_time = time.time()
             x, y, u, v, rgb = get_src_frame(args, src_reader, device)
 
@@ -175,10 +178,15 @@ def run_one_point_fast(p_frame_net, i_frame_net, args):
                 frame_types.append(0)
                 bits.append(result["bit"])
             else:
-                if reset_interval > 0 and frame_idx % reset_interval == 1:
+                if reset_interval > 0 and frame_idx % reset_interval == 1 and (not args['use_intra_predictor']):
                     dpb["ref_feature"] = None
+
                 fa_idx = index_map[frame_idx % rate_gop_size]
-                result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx)
+                result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, intra_pred=args['use_intra_predictor'])
+                if result['need_refresh']:
+                    print("Predicted refresh: ", frame_idx)
+                    dpb["ref_feature"] = None
+                    result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, intra_pred=False)
 
                 dpb = result["dpb"]
                 recon_frame = dpb["ref_frame"]
@@ -300,6 +308,7 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
     pic_width = args['src_width']
     padding_l, padding_r, padding_t, padding_b = get_padding_size(pic_height, pic_width, 16)
 
+    predicted_refresh = []
     frame_types = []
     psnrs = []
     msssims = []
@@ -318,7 +327,7 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
     sps_buffer = []
 
     with torch.no_grad():
-        for frame_idx in range(frame_num):
+        for frame_idx in trange(frame_num, desc='Encoding frames'):
             frame_start_time = time.time()
             x, y, u, v, rgb = get_src_frame(args, src_reader, device)
 
@@ -353,9 +362,17 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
                 outstanding_sps_bytes = 0
             else:
                 fa_idx = index_map[frame_idx % rate_gop_size]
-                if reset_interval > 0 and frame_idx % reset_interval == 1:
+                if reset_interval > 0 and frame_idx % reset_interval == 1 and (not args['use_intra_predictor']):
                     dpb["ref_feature"] = None
                     fa_idx = 3
+
+                result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, output_file, intra_pred=args['use_intra_predictor'])
+                if result['need_refresh']:
+                    print("Predicted refresh: ", frame_idx)
+                    predicted_refresh.append(frame_idx)
+                    dpb["ref_feature"] = None
+                    fa_idx = 3
+                    result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, output_file, intra_pred=False)
 
                 sps = {
                     'sps_id': -1,
@@ -370,8 +387,8 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
                     outstanding_sps_bytes += write_sps(output_file, sps)
                     if verbose >= 2:
                         print("new sps", sps)
-                result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, sps_id,
-                                            output_file)
+
+                result = p_frame_net.write_encoded(result, sps_id, output_file)
 
                 dpb = result["dpb"]
                 recon_frame = dpb["ref_frame"]
@@ -406,7 +423,7 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
         elif args['src_type'] == 'yuv420':
             recon_writer = YUVWriter(args['curr_rec_path'], args['src_width'], args['src_height'])
     pending_frame_spss = []
-    with torch.no_grad():
+    with torch.no_grad(), tqdm(total=frame_num, desc='Decoding frames') as pbar:
         while decoded_frame_number < frame_num:
             new_stream = False
             if len(pending_frame_spss) == 0:
@@ -473,6 +490,8 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
                     rgb_rec = ycbcr444_to_rgb(yuv_rec[:1, :, :], yuv_rec[1:, :, :])
                     recon_writer.write_one_frame(rgb=rgb_rec, src_format='rgb')
             decoded_frame_number += 1
+            pbar.update(1)
+
     input_file.close()
     src_reader.close()
 
@@ -494,7 +513,6 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
 
 i_frame_net = None  # the model is initialized after each process is spawn, thus OK for multiprocess
 p_frame_net = None
-
 
 def worker(args):
     global i_frame_net
@@ -568,6 +586,14 @@ def init_func(args, gpu_num):
         if p_frame_net is not None:
             p_frame_net.update(force=True)
         i_frame_net.update(force=True)
+
+    if args.use_intra_predictor and not args.force_intra:
+        i_predictor_net = IntraPredictorModel()
+        i_predictor_net.load_state_dict(torch.load(args.intra_predictor_path))
+        i_predictor_net = i_predictor_net.to(device)
+        i_predictor_net.eval()
+
+        p_frame_net.set_i_predictor(i_predictor_net)
 
     if args.float16:
         if p_frame_net is not None:

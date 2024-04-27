@@ -88,7 +88,7 @@ def main():
                 cur_args['src_height'] = config[ds_name]['sequences'][seq]['height']
                 cur_args['src_width'] = config[ds_name]['sequences'][seq]['width']
                 cur_args['intra_period'] = config[ds_name]['sequences'][seq]['intra_period']
-                cur_args['ref_points_path'] = config[ds_name]['sequences'][seq]['ref_points_path']
+                cur_args['ref_points_path'] = config[ds_name]['sequences'][seq].get('ref_points_path')
                 if args.force_intra:
                     cur_args['intra_period'] = 1
                 if args.force_intra_period > 0:
@@ -107,6 +107,8 @@ def main():
                 cur_args['ds_name'] = ds_name
                 cur_args['verbose'] = args.verbose
                 cur_args['verbose_json'] = args.verbose_json
+                cur_args['use_intra_predictor'] = args.use_intra_predictor
+                cur_args['intra_predictor_path'] = args.intra_predictor_path
 
                 count_frames += cur_args['frame_num']
 

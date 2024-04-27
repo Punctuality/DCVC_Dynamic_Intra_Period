@@ -1,12 +1,12 @@
 {
     "root_path": "/workspace/DCVC_Dynamic_Intra_Period/media/syntetic/",
     "test_classes": {
-        "syntentic": {
+        "frequent": {
             "test": 1,
             "base_path": "",
             "src_type": "png",
             "sequences": {
-                "frequent_dataset_0": {"width": 1920, "height": 1080, "frames": 400, "intra_period": 32}
+                "frequent_dataset_0": {"width": 1920, "height": 1080, "frames": 400, "intra_period": 401}
             }
         }
     }

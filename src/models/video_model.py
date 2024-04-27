@@ -328,6 +328,9 @@ class DMC(CompressionModel):
         self.y_q_enc = nn.Parameter(torch.ones((2, 1, 1, 1)))
         self.y_q_dec = nn.Parameter(torch.ones((2, 1, 1, 1)))
 
+    def set_i_predictor(self, i_predictor_net):
+        self.i_predictor_net = i_predictor_net
+
     def multi_scale_feature_extractor(self, dpb, fa_idx):
         if dpb["ref_feature"] is None:
             feature = self.feature_adaptor_I(dpb["ref_frame"])
@@ -394,7 +397,7 @@ class DMC(CompressionModel):
         y_q_dec = self.get_curr_q(self.y_q_dec, q_index)
         return mv_y_q_enc, mv_y_q_dec, y_q_enc, y_q_dec
 
-    def compress(self, x, dpb, q_index, fa_idx):
+    def compress(self, x, dpb, q_index, fa_idx, intra_pred=False):
         # pic_width and pic_height may be different from x's size. x here is after padding
         # x_hat has the same size with x
         mv_y_q_enc, mv_y_q_dec, y_q_enc, y_q_dec = self.get_all_q(q_index)
@@ -414,6 +417,12 @@ class DMC(CompressionModel):
         context1, context2, context3, _ = self.motion_compensation(dpb, mv_hat, fa_idx)
 
         y = self.contextual_encoder(x, context1, context2, context3, y_q_enc)
+
+        if intra_pred:
+            _, intra_prediction = self.i_predictor_net(y)
+            if intra_prediction > 0.5:
+                return None, True
+
         y_pad, slice_shape = self.pad_for_y(y)
         z = self.contextual_hyper_prior_encoder(y_pad)
         z_hat = torch.round(z)
@@ -450,7 +459,7 @@ class DMC(CompressionModel):
             },
             "bit_stream": bit_stream,
         }
-        return result
+        return result, False
 
     def decompress(self, bit_stream, dpb, sps):
         dtype = next(self.parameters()).dtype
@@ -506,32 +515,59 @@ class DMC(CompressionModel):
         }
         return result
 
-    def encode(self, x, dpb, q_index, fa_idx, sps_id=0, output_file=None):
+    def encode(self, x, dpb, q_index, fa_idx, output_file=None, intra_pred=False):
         # pic_width and pic_height may be different from x's size. x here is after padding
         # x_hat has the same size with x
-        if output_file is None:
-            encoded = self.forward_one_frame(x, dpb, q_index=q_index, fa_idx=fa_idx)
-            result = {
-                "dpb": encoded['dpb'],
-                "bit": encoded['bit'].item(),
-            }
-            return result
+        result = None
 
-        device = x.device
-        torch.cuda.synchronize(device=device)
-        t0 = time.time()
-        encoded = self.compress(x, dpb, q_index, fa_idx)
-        written = write_ip(output_file, False, sps_id, encoded['bit_stream'])
-        torch.cuda.synchronize(device=device)
-        t1 = time.time()
-        result = {
-            "dpb": encoded["dpb"],
-            "bit": written * 8,
-            "encoding_time": t1 - t0,
-        }
+        if output_file is None:
+            encoded, intra_prediction = self.forward_one_frame(x, dpb, q_index=q_index, fa_idx=fa_idx, intra_pred=intra_pred)
+            result = {
+                "need_refresh": intra_prediction
+            }
+            if not intra_prediction:
+                result.update({
+                    "dpb": encoded['dpb'],
+                    "bit": encoded['bit'].item(),
+                })
+        else:
+            device = x.device
+            torch.cuda.synchronize(device=device)
+            t0 = time.time()
+            encoded, intra_prediction = self.compress(x, dpb, q_index, fa_idx, intra_pred)
+            torch.cuda.synchronize(device=device)
+            t1 = time.time()
+            result = {
+                "need_refresh": intra_prediction,
+            }
+            if not intra_prediction:
+                result.update({
+                    "dpb": encoded["dpb"],
+                    "bit_stream": encoded['bit_stream'],
+                    "encoding_time": t1 - t0,
+                })
         return result
 
-    def forward_one_frame(self, x, dpb, q_index=None, fa_idx=0):
+    def write_encoded(self, intermediate_result, sps_id=0, output_file=None):
+        # pic_width and pic_height may be different from x's size. x here is after padding
+        # x_hat has the same size with x
+        result = intermediate_result
+
+        if output_file is not None:
+            device = next(self.parameters()).device
+            torch.cuda.synchronize(device=device)
+            t0 = time.time()
+            written = write_ip(output_file, False, sps_id, intermediate_result['bit_stream'])
+            torch.cuda.synchronize(device=device)
+            t1 = time.time()
+            result.update({
+                "dpb": intermediate_result["dpb"],
+                "bit": written * 8,
+                "encoding_time": (t1 - t0) + intermediate_result['encoding_time'],
+            })
+        return result
+
+    def forward_one_frame(self, x, dpb, q_index=None, fa_idx=0, intra_pred=False):
         mv_y_q_enc, mv_y_q_dec, y_q_enc, y_q_dec = self.get_all_q(q_index)
         index = self.get_index_tensor(0, x.device)
 
@@ -551,6 +587,11 @@ class DMC(CompressionModel):
         context1, context2, context3, _ = self.motion_compensation(dpb, mv_hat, fa_idx)
 
         y = self.contextual_encoder(x, context1, context2, context3, y_q_enc)
+        
+        if intra_pred:
+            _, intra_prediction = self.i_predictor_net(y)
+            if intra_prediction > 0.5:
+                return None, True
 
         y_pad, slice_shape = self.pad_for_y(y)
         z = self.contextual_hyper_prior_encoder(y_pad)
@@ -581,15 +622,18 @@ class DMC(CompressionModel):
         bpp = bpp_y + bpp_z + bpp_mv_y + bpp_mv_z
         bit = torch.sum(bpp) * pixel_num
 
-        return {"dpb": {
-                    "ref_frame": x_hat,
-                    "ref_feature": feature,
-                    "ref_mv_feature": mv_feature,
-                    "ref_y": y_hat,
-                    "ref_mv_y": mv_y_hat,
-                },
-                "bit": bit,
-                "meta": {
-                    "context": y.detach().cpu(),
+        res_dict = {    
+                    "dpb": {
+                        "ref_frame": x_hat,
+                        "ref_feature": feature,
+                        "ref_mv_feature": mv_feature,
+                        "ref_y": y_hat,
+                        "ref_mv_y": mv_y_hat,
+                    },
+                    "bit": bit,
+                    "meta": {
+                        "context": y.detach().cpu(),
+                    }
                 }
-                }
+
+        return res_dict, False
