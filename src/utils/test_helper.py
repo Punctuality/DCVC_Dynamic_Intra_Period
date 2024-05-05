@@ -238,6 +238,10 @@ def generate_context_dataset(p_frame_net, i_frame_net, args):
 
     encoded_context_dataset = []
 
+    # If max PSNR of last 16 frames is lower then minimum PSNR of first 32 frames since refresh, do refresh
+    psnr_window_size = 32
+    last_refresh_frame = 0
+
     with torch.no_grad():
         for frame_idx in trange(frame_num, desc=f'Encoding frames'):
             frame_start_time = time.time()
@@ -259,8 +263,24 @@ def generate_context_dataset(p_frame_net, i_frame_net, args):
                 frame_types.append(0)
                 bits.append(result["bit"])
             else:
-                if (frame_idx + 1) in ref_points:
+                window_condition = False
+                if last_refresh_frame < frame_idx - psnr_window_size:
+                    min_start_window = np.percentile(psnrs[last_refresh_frame: last_refresh_frame + psnr_window_size], 20)
+                    max_end_window = np.percentile(psnrs[-(psnr_window_size // 2):], 80)
+                    window_condition = min_start_window > max_end_window
+
+                if (frame_idx + 1) in ref_points or window_condition:
                     dpb["ref_feature"] = None
+                    last_refresh_frame = frame_idx
+                    if window_condition:
+                        print(f"Predicted refresh by PSNR ({min_start_window} > {max_end_window}): ", frame_idx)
+                        frame_types.append(3)
+                    else:
+                        print(f"Predefined refresh: ", frame_idx)
+                        frame_types.append(2)
+                else:
+                    frame_types.append(1)
+
                 fa_idx = index_map[frame_idx % rate_gop_size]
                 result = p_frame_net.fetch_context(x_padded, dpb, args['q_index_p'], fa_idx)
 
@@ -268,7 +288,6 @@ def generate_context_dataset(p_frame_net, i_frame_net, args):
 
                 dpb = result["dpb"]
                 recon_frame = dpb["ref_frame"]
-                frame_types.append(1)
                 bits.append(result['bit'])
 
             recon_frame = recon_frame.clamp_(0, 1)
