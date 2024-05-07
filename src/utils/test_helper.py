@@ -345,6 +345,10 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
     outstanding_sps_bytes = 0
     sps_buffer = []
 
+    # If max PSNR of last 16 frames is lower then minimum PSNR of first 32 frames since refresh, do refresh
+    psnr_window_size = 32
+    last_refresh_frame = 0
+
     with torch.no_grad():
         for frame_idx in trange(frame_num, desc='Encoding frames'):
             frame_start_time = time.time()
@@ -353,7 +357,7 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
             # pad if necessary
             x_padded = F.pad(x, (padding_l, padding_r, padding_t, padding_b), mode="replicate")
 
-            if frame_idx % args['intra_period'] == 0: # TODO add check for referenced points
+            if frame_idx % args['intra_period'] == 0:
                 sps = {
                     'sps_id': -1,
                     'height': pic_height,
@@ -381,16 +385,31 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
                 outstanding_sps_bytes = 0
             else:
                 fa_idx = index_map[frame_idx % rate_gop_size]
-                if reset_interval > 0 and frame_idx % reset_interval == 1 and (not args['use_intra_predictor']):
+
+                window_condition = False
+                if last_refresh_frame < frame_idx - psnr_window_size:
+                    min_start_window = np.percentile(psnrs[last_refresh_frame: last_refresh_frame + psnr_window_size], 20)
+                    max_end_window = np.percentile(psnrs[-(psnr_window_size // 2):], 80)
+                    window_condition = min_start_window > max_end_window
+                    if window_condition:
+                        print(f"Predicted refresh by PSNR ({min_start_window} > {max_end_window}): ", frame_idx)
+
+                if (reset_interval > 0 and frame_idx % reset_interval == 1 and (not args['use_intra_predictor'])) or window_condition:
                     dpb["ref_feature"] = None
                     fa_idx = 3
+                    last_refresh_frame = frame_idx
+                    
 
-                result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, output_file, intra_pred=args['use_intra_predictor'])
+                result = p_frame_net.encode(
+                    x_padded, dpb, args['q_index_p'], fa_idx, 
+                    output_file, intra_pred=False if window_condition else args['use_intra_predictor']
+                    )
                 if result['need_refresh']:
                     print("Predicted refresh: ", frame_idx)
                     predicted_refresh.append(frame_idx)
                     dpb["ref_feature"] = None
                     fa_idx = 3
+                    last_refresh_frame = frame_idx
                     result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, output_file, intra_pred=False)
 
                 sps = {
@@ -435,6 +454,10 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
     input_file = bitstream_path.open("rb")
     decoded_frame_number = 0
     src_reader = get_src_reader(args)
+
+    # If max PSNR of last 16 frames is lower then minimum PSNR of first 32 frames since refresh, do refresh
+    psnr_window_size = 32
+    last_refresh_frame = 0
 
     if save_decoded_frame:
         if args['src_type'] == 'png':

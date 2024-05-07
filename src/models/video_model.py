@@ -420,7 +420,8 @@ class DMC(CompressionModel):
 
         if intra_pred:
             _, intra_prediction = self.i_predictor_net(y)
-            if intra_prediction > 0.20:
+            if intra_prediction > 0.5:
+                print(f"Intra prediction is triggered: {intra_prediction}")
                 return None, True
 
         y_pad, slice_shape = self.pad_for_y(y)
@@ -590,7 +591,7 @@ class DMC(CompressionModel):
         
         if intra_pred:
             _, intra_prediction = self.i_predictor_net(y)
-            if intra_prediction > 0.20:
+            if intra_prediction > 0.5:
                 return None, True
 
         y_pad, slice_shape = self.pad_for_y(y)
