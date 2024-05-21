@@ -158,7 +158,8 @@ def run_one_point_fast(p_frame_net, i_frame_net, args):
     padding_l, padding_r, padding_t, padding_b = get_padding_size(pic_height, pic_width, 16)
 
     with torch.no_grad():
-        for frame_idx in trange(frame_num, desc='Encoding frames'):
+        pbar = trange(frame_num, desc='Encoding frames')
+        for frame_idx in pbar:
             frame_start_time = time.time()
             x, y, u, v, rgb = get_src_frame(args, src_reader, device)
 
@@ -197,6 +198,11 @@ def run_one_point_fast(p_frame_net, i_frame_net, args):
             x_hat = F.pad(recon_frame, (-padding_l, -padding_r, -padding_t, -padding_b))
             frame_end_time = time.time()
             curr_psnr, curr_ssim = get_distortion(args, x_hat, y, u, v, rgb)
+            dpb['last_psnr'] = curr_psnr
+            dpb['last_ssim'] = curr_ssim
+
+            pbar.set_postfix({'psnr': curr_psnr[0]})
+
             psnrs.append(curr_psnr)
             msssims.append(curr_ssim)
 
@@ -345,12 +351,17 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
     outstanding_sps_bytes = 0
     sps_buffer = []
 
+    ref_psnr = []
+    ref_ssim = []
     # If max PSNR of last 16 frames is lower then minimum PSNR of first 32 frames since refresh, do refresh
     psnr_window_size = 32
     last_refresh_frame = 0
 
     with torch.no_grad():
-        for frame_idx in trange(frame_num, desc='Encoding frames'):
+        pbar = trange(frame_num, desc='Encoding frames')
+        store_ref_metric = 0
+
+        for frame_idx in pbar:
             frame_start_time = time.time()
             x, y, u, v, rgb = get_src_frame(args, src_reader, device)
 
@@ -358,6 +369,7 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
             x_padded = F.pad(x, (padding_l, padding_r, padding_t, padding_b), mode="replicate")
 
             if frame_idx % args['intra_period'] == 0:
+                store_ref_metric = 16
                 sps = {
                     'sps_id': -1,
                     'height': pic_height,
@@ -391,13 +403,15 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
                     min_start_window = np.percentile(psnrs[last_refresh_frame: last_refresh_frame + psnr_window_size], 20)
                     max_end_window = np.percentile(psnrs[-(psnr_window_size // 2):], 80)
                     window_condition = min_start_window > max_end_window
-                    if window_condition:
-                        print(f"Predicted refresh by PSNR ({min_start_window} > {max_end_window}): ", frame_idx)
+                    # if window_condition:
+                    #     print(f"Predicted refresh by PSNR ({min_start_window} > {max_end_window}): ", frame_idx)
+                window_condition = False # Disable switch by PSNR, only predict refresh
 
                 if (reset_interval > 0 and frame_idx % reset_interval == 1 and (not args['use_intra_predictor'])) or window_condition:
                     dpb["ref_feature"] = None
                     fa_idx = 3
                     last_refresh_frame = frame_idx
+                    store_ref_metric = 16
                     
 
                 result = p_frame_net.encode(
@@ -410,6 +424,7 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
                     dpb["ref_feature"] = None
                     fa_idx = 3
                     last_refresh_frame = frame_idx
+                    store_ref_metric = 16
                     result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, output_file, intra_pred=False)
 
                 sps = {
@@ -440,6 +455,17 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
             x_hat = F.pad(recon_frame, (-padding_l, -padding_r, -padding_t, -padding_b))
             frame_end_time = time.time()
             curr_psnr, curr_ssim = get_distortion(args, x_hat, y, u, v, rgb)
+            if store_ref_metric > 0:
+                store_ref_metric -= 1
+                ref_psnr.append(curr_psnr)
+                ref_ssim.append(curr_ssim)
+            dpb['ref_psnr'] = np.mean(ref_psnr)
+            dpb['ref_ssim'] = np.mean(ref_ssim)
+            dpb['last_psnr'] = curr_psnr[0]
+            dpb['last_ssim'] = curr_ssim[0]
+
+            pbar.set_postfix({'psnr': dpb['last_psnr'] / dpb['ref_psnr'], 'ref_psnr': dpb['ref_psnr'], 'ref_left': store_ref_metric})
+
             psnrs.append(curr_psnr)
             msssims.append(curr_ssim)
 
@@ -636,6 +662,8 @@ def init_func(args, gpu_num):
         i_predictor_net.eval()
 
         p_frame_net.set_i_predictor(i_predictor_net)
+    elif not args.use_intra_predictor:
+        p_frame_net.set_i_predictor(None)
 
     if args.float16:
         if p_frame_net is not None:

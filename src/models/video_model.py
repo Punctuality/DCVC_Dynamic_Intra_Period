@@ -330,6 +330,13 @@ class DMC(CompressionModel):
 
     def set_i_predictor(self, i_predictor_net):
         self.i_predictor_net = i_predictor_net
+        if self.i_predictor_net:
+            self.i_predictor_net = self.i_predictor_net.eval()
+
+    def half(self):
+        super().half()
+        if self.i_predictor_net:
+            self.i_predictor_net = self.i_predictor_net.to(torch.float32)
 
     def multi_scale_feature_extractor(self, dpb, fa_idx):
         if dpb["ref_feature"] is None:
@@ -400,6 +407,9 @@ class DMC(CompressionModel):
     def compress(self, x, dpb, q_index, fa_idx, intra_pred=False):
         # pic_width and pic_height may be different from x's size. x here is after padding
         # x_hat has the same size with x
+        dtype = next(self.parameters()).dtype
+        device = next(self.parameters()).device
+
         mv_y_q_enc, mv_y_q_dec, y_q_enc, y_q_dec = self.get_all_q(q_index)
         mv_y = self.motion_estimation_and_mv_encoding(x, dpb, mv_y_q_enc)
         mv_y_pad, slice_shape = self.pad_for_y(mv_y)
@@ -419,8 +429,13 @@ class DMC(CompressionModel):
         y = self.contextual_encoder(x, context1, context2, context3, y_q_enc)
 
         if intra_pred:
-            _, intra_prediction = self.i_predictor_net(y)
-            if intra_prediction > 0.5:
+            y_32 = y.to(torch.float32)
+            psnrs = torch.tensor([dpb['last_psnr'] / dpb['ref_psnr']]).to(torch.float32).to(device).unsqueeze(0)
+            _, intra_prediction = self.i_predictor_net(y_32, psnrs)
+            # if intra_prediction > 0.01:
+            #     print("IP: ", intra_prediction, " ", y.shape)
+            if intra_prediction > 0.2:
+                self.i_predictor_net.reset_state()
                 print(f"Intra prediction is triggered: {intra_prediction}")
                 return None, True
 
@@ -569,6 +584,9 @@ class DMC(CompressionModel):
         return result
 
     def forward_one_frame(self, x, dpb, q_index=None, fa_idx=0, intra_pred=False):
+        dtype = next(self.parameters()).dtype
+        device = next(self.parameters()).device
+
         mv_y_q_enc, mv_y_q_dec, y_q_enc, y_q_dec = self.get_all_q(q_index)
         index = self.get_index_tensor(0, x.device)
 
@@ -590,8 +608,12 @@ class DMC(CompressionModel):
         y = self.contextual_encoder(x, context1, context2, context3, y_q_enc)
         
         if intra_pred:
-            _, intra_prediction = self.i_predictor_net(y)
+            y_32 = y.to(torch.float32)
+            psnrs = torch.tensor([dpb['last_psnr'] / dpb['ref_psnr']]).to(torch.float32).to(device).unsqueeze(0)
+            _, intra_prediction = self.i_predictor_net(y_32, psnrs)
             if intra_prediction > 0.5:
+                self.i_predictor_net.reset_state()
+                print(f"Intra prediction is triggered: {intra_prediction}")
                 return None, True
 
         y_pad, slice_shape = self.pad_for_y(y)

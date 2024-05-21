@@ -11,3 +11,5 @@ ptflops
 jupyter
 matplotlib
 scikit_learn
+graphviz
+torchview

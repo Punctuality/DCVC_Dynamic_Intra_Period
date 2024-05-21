@@ -25,24 +25,32 @@ def convert_one_seq_to_png(src_path, width, height, dst_path):
 
 def main():
     src_paths = [
-        # "input/Beauty_1920x1080_120fps_420_8bit_YUV.yuv",
-        "input/HoneyBee_1920x1080_120fps_420_8bit_YUV.yuv",
-        "input/ReadySteadyGo_1920x1080_120fps_420_8bit_YUV.yuv",
-        "input/YachtRide_1920x1080_120fps_420_8bit_YUV.yuv",
-        "input/Bosphorus_1920x1080_120fps_420_8bit_YUV.yuv",
-        "input/Jockey_1920x1080_120fps_420_8bit_YUV.yuv",
-        "input/ShakeNDry_1920x1080_120fps_420_8bit_YUV.yuv"
+        "input/MCV/videoSRC01_1280x720_30.yuv",
+        "input/MCV/videoSRC03_1280x720_30.yuv",
+        "input/MCV/videoSRC04_1280x720_30.yuv",
+        "input/MCV/videoSRC05_1280x720_25.yuv",
+        "input/MCV/videoSRC06_1280x720_25.yuv",
+        "input/MCV/videoSRC07_1280x720_25.yuv",
+        "input/MCV/videoSRC13_1280x720_30.yuv",
+        "input/MCV/videoSRC15_1280x720_30.yuv",
+        "input/MCV/videoSRC18_1280x720_25.yuv",
+        "input/MCV/videoSRC21_1280x720_24.yuv",
+        "input/MCV/videoSRC23_1280x720_24.yuv"
     ]
-    width = 1920
-    height = 1080
+    width = 1280
+    height = 720
     dst_paths = [
-        # "media/UVG/Beauty_1920x1080_120fps_420_8bit_YUV",
-        "media/UVG/HoneyBee_1920x1080_120fps_420_8bit_YUV",
-        "media/UVG/ReadySteadyGo_1920x1080_120fps_420_8bit_YUV",
-        "media/UVG/YachtRide_1920x1080_120fps_420_8bit_YUV",
-        "media/UVG/Bosphorus_1920x1080_120fps_420_8bit_YUV",
-        "media/UVG/Jockey_1920x1080_120fps_420_8bit_YUV",
-        "media/UVG/ShakeNDry_1920x1080_120fps_420_8bit_YUV"
+        "media/MCV/videoSRC01_1280x720_30_YUV",
+        "media/MCV/videoSRC03_1280x720_30_YUV",
+        "media/MCV/videoSRC04_1280x720_30_YUV",
+        "media/MCV/videoSRC05_1280x720_25_YUV",
+        "media/MCV/videoSRC06_1280x720_25_YUV",
+        "media/MCV/videoSRC07_1280x720_25_YUV",
+        "media/MCV/videoSRC13_1280x720_30_YUV",
+        "media/MCV/videoSRC15_1280x720_30_YUV",
+        "media/MCV/videoSRC18_1280x720_25_YUV",
+        "media/MCV/videoSRC21_1280x720_24_YUV",
+        "media/MCV/videoSRC23_1280x720_24_YUV"
     ]
 
     for i in range(len(src_paths)):
