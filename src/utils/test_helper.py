@@ -183,7 +183,8 @@ def run_one_point_fast(p_frame_net, i_frame_net, args):
                     dpb["ref_feature"] = None
 
                 fa_idx = index_map[frame_idx % rate_gop_size]
-                result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, intra_pred=args['use_intra_predictor'])
+                use_intra_pred = args['use_intra_predictor']
+                result = p_frame_net.encode(x_padded, dpb, args['q_index_p'], fa_idx, intra_pred=use_intra_pred)
                 if result['need_refresh']:
                     print("Predicted refresh: ", frame_idx)
                     dpb["ref_feature"] = None
@@ -413,10 +414,14 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
                     last_refresh_frame = frame_idx
                     store_ref_metric = 16
                     
+                use_intra_pred = False if window_condition else args['use_intra_predictor']
+                if last_refresh_frame > frame_idx - 16:
+                    use_intra_pred = False
+
 
                 result = p_frame_net.encode(
                     x_padded, dpb, args['q_index_p'], fa_idx, 
-                    output_file, intra_pred=False if window_condition else args['use_intra_predictor']
+                    output_file, intra_pred=use_intra_pred
                     )
                 if result['need_refresh']:
                     print("Predicted refresh: ", frame_idx)

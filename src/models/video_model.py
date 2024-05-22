@@ -434,7 +434,7 @@ class DMC(CompressionModel):
             _, intra_prediction = self.i_predictor_net(y_32, psnrs)
             # if intra_prediction > 0.01:
             #     print("IP: ", intra_prediction, " ", y.shape)
-            if intra_prediction > 0.2:
+            if intra_prediction > 0.5:
                 self.i_predictor_net.reset_state()
                 print(f"Intra prediction is triggered: {intra_prediction}")
                 return None, True
