@@ -434,7 +434,7 @@ class DMC(CompressionModel):
             _, intra_prediction = self.i_predictor_net(y_32, psnrs)
             # if intra_prediction > 0.01:
             #     print("IP: ", intra_prediction, " ", y.shape)
-            if intra_prediction > 0.5:
+            if intra_prediction > 0.2:
                 self.i_predictor_net.reset_state()
                 print(f"Intra prediction is triggered: {intra_prediction}")
                 return None, True
@@ -611,7 +611,7 @@ class DMC(CompressionModel):
             y_32 = y.to(torch.float32)
             psnrs = torch.tensor([dpb['last_psnr'] / dpb['ref_psnr']]).to(torch.float32).to(device).unsqueeze(0)
             _, intra_prediction = self.i_predictor_net(y_32, psnrs)
-            if intra_prediction > 0.5:
+            if intra_prediction > 0.2:
                 self.i_predictor_net.reset_state()
                 print(f"Intra prediction is triggered: {intra_prediction}")
                 return None, True

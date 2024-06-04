@@ -403,10 +403,10 @@ def run_one_point_with_stream(p_frame_net, i_frame_net, args):
                 if last_refresh_frame < frame_idx - psnr_window_size:
                     min_start_window = np.percentile(psnrs[last_refresh_frame: last_refresh_frame + psnr_window_size], 20)
                     max_end_window = np.percentile(psnrs[-(psnr_window_size // 2):], 80)
-                    window_condition = min_start_window > max_end_window
-                    # if window_condition:
-                    #     print(f"Predicted refresh by PSNR ({min_start_window} > {max_end_window}): ", frame_idx)
-                window_condition = False # Disable switch by PSNR, only predict refresh
+                    window_condition = (min_start_window > max_end_window) and (args['use_intra_predictor'])
+                    if window_condition:
+                        print(f"Predicted refresh by PSNR ({min_start_window} > {max_end_window}): ", frame_idx)
+                # window_condition = False # Disable switch by PSNR, only predict refresh
 
                 if (reset_interval > 0 and frame_idx % reset_interval == 1 and (not args['use_intra_predictor'])) or window_condition:
                     dpb["ref_feature"] = None
